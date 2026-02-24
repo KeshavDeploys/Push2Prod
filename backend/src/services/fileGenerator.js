@@ -1,84 +1,44 @@
 import fs from "fs-extra";
 import path from "path";
 
+function replaceVars(template, vars) {
+  return template
+    .replace(/{{PORT}}/g, vars.port)
+    .replace(/{{EC2_IP}}/g, vars.ec2Ip)
+    .replace(/{{SSH_USER}}/g, vars.sshUser);
+}
+
 export async function generateFiles(workdir, options) {
-  const {
-    port,
-    ec2Ip,
-    sshUser,
-    nodeVersion = "20"
-  } = options;
+  const { port, ec2Ip, sshUser, stackType } = options;
 
-  // ---------------------
-  // Dockerfile
-  // ---------------------
+  let dockerTemplatePath;
 
-  const dockerfile = `FROM node:${nodeVersion}-alpine
+  if (stackType === "mern") {
+    dockerTemplatePath = "Dockerfile.mern.tpl";
+  } else if (stackType === "mean") {
+    dockerTemplatePath = "Dockerfile.mean.tpl";
+  } else if (stackType === "python") {
+    dockerTemplatePath = "Dockerfile.python.tpl";
+  } else {
+    throw new Error("Unsupported stack configuration.");
+  }
 
-WORKDIR /app
+  const dockerTemplate = await fs.readFile(
+    path.join(process.cwd(), "src", "templates", dockerTemplatePath),
+    "utf-8"
+  );
 
-COPY package*.json ./
-RUN npm install
+  const workflowTemplate = await fs.readFile(
+    path.join(process.cwd(), "src", "templates", "github-actions.tpl.yml"),
+    "utf-8"
+  );
 
-COPY . .
-
-EXPOSE ${port}
-
-CMD ["npm", "start"]
-`;
+  const dockerfile = replaceVars(dockerTemplate, { port });
+  const workflow = replaceVars(workflowTemplate, { port, ec2Ip, sshUser });
 
   await fs.writeFile(path.join(workdir, "Dockerfile"), dockerfile);
 
-  // ---------------------
-  // GitHub Workflow
-  // ---------------------
-
-  const workflow = `name: Deploy to EC2
-
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${ec2Ip}
-          username: ${sshUser}
-          key: \${{ secrets.EC2_SSH_KEY }}
-          script: |
-            set -e
-
-            cd /home/${sshUser}
-
-            if [ ! -d "app" ]; then
-              git clone https://github.com/\${{ github.repository }}.git app
-            fi
-
-            cd app
-            git pull origin main
-
-            docker stop app || true
-            docker rm app || true
-            docker rmi app || true
-
-            docker build -t app .
-            docker run -d -p 80:${port} --name app app
-`;
-
   const workflowDir = path.join(workdir, ".github", "workflows");
   await fs.ensureDir(workflowDir);
-
-  await fs.writeFile(
-    path.join(workflowDir, "deploy.yml"),
-    workflow
-  );
+  await fs.writeFile(path.join(workflowDir, "deploy.yml"), workflow);
 }

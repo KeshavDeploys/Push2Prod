@@ -1,35 +1,59 @@
 import fs from "fs-extra";
 import path from "path";
 
-export async function analyzeNodeProject(workdir) {
-  const packagePath = path.join(workdir, "package.json");
+export async function analyzeProject(workdir) {
+  const rootPackagePath = path.join(workdir, "package.json");
+  const clientPackagePath = path.join(workdir, "client", "package.json");
 
-  const exists = await fs.pathExists(packagePath);
-  if (!exists) {
-    throw new Error("Not a Node.js project (package.json missing)");
+  const requirementsPath = path.join(workdir, "requirements.txt");
+  const pyprojectPath = path.join(workdir, "pyproject.toml");
+  const managePyPath = path.join(workdir, "manage.py");
+
+  // -------------------------
+  // MERN / MEAN Detection
+  // -------------------------
+
+  const rootExists = await fs.pathExists(rootPackagePath);
+  const clientExists = await fs.pathExists(clientPackagePath);
+
+  if (rootExists && clientExists) {
+    const clientPackage = await fs.readJson(clientPackagePath);
+    const deps = {
+      ...clientPackage.dependencies,
+      ...clientPackage.devDependencies
+    };
+
+    if (deps?.react) {
+      return { stackType: "mern" };
+    }
+
+    if (deps?.["@angular/core"]) {
+      return { stackType: "mean" };
+    }
+
+    throw new Error(
+      "Unsupported frontend framework. Only React (MERN) or Angular (MEAN) supported."
+    );
   }
 
-  const packageJson = await fs.readJson(packagePath);
+  // -------------------------
+  // Python Detection
+  // -------------------------
 
-  // Node version
-  const nodeVersion =
-    packageJson.engines?.node?.replace(/[^\d]/g, "") || "18";
+  const isPython =
+    (await fs.pathExists(requirementsPath)) ||
+    (await fs.pathExists(pyprojectPath)) ||
+    (await fs.pathExists(managePyPath));
 
-  // Detect package manager
-  let packageManager = "npm";
-  if (await fs.pathExists(path.join(workdir, "yarn.lock"))) {
-    packageManager = "yarn";
-  }
-  if (await fs.pathExists(path.join(workdir, "pnpm-lock.yaml"))) {
-    packageManager = "pnpm";
+  if (isPython) {
+    return { stackType: "python" };
   }
 
-  // Detect start script
-  const startScript = packageJson.scripts?.start || "start";
+  // -------------------------
+  // STRICT REJECTION
+  // -------------------------
 
-  return {
-    nodeVersion,
-    packageManager,
-    startScript
-  };
+  throw new Error(
+    "Unsupported stack. Only MERN, MEAN, and Python apps are supported."
+  );
 }
